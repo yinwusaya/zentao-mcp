@@ -337,6 +337,58 @@ async function getZentaoBugs(queryParams = {}) {
   }
 }
 
+// 解决Bug
+async function resolveBug(bugId, resolutionData) {
+  try {
+    const token = await getZentaoToken();
+    const resolveUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs/${bugId}/resolve`;
+
+    const response = await axios.post(
+      resolveUrl,
+      resolutionData,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Token: token,
+        },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    // 如果是token过期相关的错误，清除缓存的token
+    if (
+      error.response &&
+      (error.response.status === 401 || error.response.status === 403)
+    ) {
+      cachedToken = null;
+      // 重新尝试获取token并再次请求
+      try {
+        const token = await getZentaoToken();
+        const resolveUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs/${bugId}/resolve`;
+
+        const response = await axios.post(
+          resolveUrl,
+          resolutionData,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Token: token,
+            },
+          }
+        );
+
+        return response.data;
+      } catch (retryError) {
+        console.error("重新解决Bug失败:", retryError.message);
+        throw retryError;
+      }
+    }
+    console.error("解决Bug失败:", error.message);
+    throw error;
+  }
+}
+
 // 定义MCP工具
 server.registerTool(
   "get_zentao_user_profile",
@@ -621,6 +673,104 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "resolve_zentao_bug",
+  {
+    title: "标记禅道Bug已解决",
+    description: "标记指定的禅道Bug为已解决(不是实际解决bug，只是修改禅道状态)",
+    inputSchema: {
+      bugId: z.number().describe("Bug ID"),
+      resolution: z.string().describe("解决方案(bydesign 设计如此 | duplicate 重复bug | external 外部原因 | fixed 已解决 | notrepro 无法重现 | postponed 延期处理 | willnotfix 不予解决 | tostory 转需求)"),
+      duplicateBug: z.number().optional().describe("重复Bug ID，当 resolution 选择 duplicate 时，应传入此参数"),
+      resolvedBuild: z.union([z.number(), z.string()]).optional().describe("解决版本，传入版本的ID，或者传入 trunk（主干）"),
+      resolvedDate: z.string().optional().describe("解决时间"),
+      assignedTo: z.string().optional().describe("指派给"),
+      comment: z.string().optional().describe("备注"),
+    },
+  },
+  async (input) => {
+    try {
+      if (!input.bugId) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "错误: 必须提供Bug ID",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (!input.resolution) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "错误: 必须提供解决方案(resolution)",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // 构造解决Bug的数据
+      const resolutionData = {
+        resolution: input.resolution,
+      };
+
+      // 可选参数
+      if (input.duplicateBug !== undefined) {
+        resolutionData.duplicateBug = input.duplicateBug;
+      }
+      // 如果未提供解决版本，则默认为主干版本
+      if (input.resolvedBuild !== undefined) {
+        resolutionData.resolvedBuild = input.resolvedBuild;
+      } else {
+        resolutionData.resolvedBuild = "trunk";
+      }
+      // 如果未提供解决时间，则使用当前时间
+      if (input.resolvedDate !== undefined) {
+        resolutionData.resolvedDate = input.resolvedDate;
+      } else {
+        resolutionData.resolvedDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      }
+      if (input.assignedTo !== undefined) {
+        resolutionData.assignedTo = input.assignedTo;
+      }
+      if (input.comment !== undefined) {
+        resolutionData.comment = input.comment;
+      }
+
+      const result = await resolveBug(input.bugId, resolutionData);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              bugId: input.bugId,
+              result: result,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      console.error("解决禅道Bug时出错:", error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `解决禅道Bug时出错: ${error.message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
 // 启动MCP服务
 async function main() {
   console.log("[DEBUG] 开始启动ZenTao MCP服务");
@@ -633,6 +783,7 @@ async function main() {
   console.log("- get_bugs_by_product_id: 根据产品ID获取Bug列表");
   console.log("- get_bug_details: 获取Bug详情");
   console.log("- view_zentao_bugs: 查看禅道Bug");
+  console.log("- resolve_zentao_bug: 解决禅道Bug");
 }
 // console.log('SOLA',import.meta.url)
 
