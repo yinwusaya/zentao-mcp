@@ -1,94 +1,143 @@
-# ZenTao MCP Service
+# ZenTao MCP Server
 
-一个用于查看和管理禅道系统Bug的MCP服务，能用但不好用。
-
-纯AI生成的代码，请根据实际需求进行调整和优化。
-
+一个用于与禅道项目管理软件集成的MCP（Model Context Protocol）服务器，提供Bug查看、产品管理等功能。
 
 ## 功能特性
 
-- 查看禅道系统中的Bug列表
-- 支持根据产品、项目、用户等条件筛选Bug
-- 解决禅道系统中的Bug
-- 提供标准 MCP 工具接口
+- 🔐 **用户认证**：自动管理禅道API认证token
+- 📦 **产品管理**：获取禅道系统中的产品列表
+- 🐛 **Bug查看**：
+  - 查看所有Bug列表
+  - 根据产品ID查看特定产品的Bug
+  - 获取Bug详细信息
+  - 支持三种图片模式（none/url/base64）
+- ✅ **Bug处理**：标记Bug为已解决状态
+- 🖼️ **图片处理**：
+  - 支持获取禅道Bug中的图片
+  - 自动上传到图床服务
+  - 支持URL和Base64两种返回模式
 
-## 安装
+## 快速开始
+
+### 安装依赖
 
 ```bash
 npm install
+# 或
+pnpm install
 ```
 
-## 配置
+### 配置环境变量
 
-创建 `.env` 文件或设置环境变量：
+创建 `.env` 文件并配置以下变量：
 
 ```env
-# 禅道系统地址
-ZENTAO_URL=http://localhost/zentao
-
-# 登录凭据
-ZENTAO_USERNAME=admin
-ZENTAO_PASSWORD=admin
-
-# API版本
+# 禅道系统配置
+ZENTAO_URL=http://your-zentao-url
+ZENTAO_USERNAME=your-username
+ZENTAO_PASSWORD=your-password
 ZENTAO_API_VERSION=v1
 
-# 缓存时间（毫秒）
+# 图床配置（可选）
+IMAGE_BED_URL=https://xxx.com
+IMAGE_BED_AUTH=your-auth-code
+
+# 缓存时间（可选，默认5分钟）
 CACHE_DURATION=300000
 ```
 
-## 使用方式
+### 启动服务
 
-### MCP 配置
-根据实际情况修改
-```json
-    "local-zentao": {
-      "command": "node",
-      "args": [
-        "c:...\zentao-mcp\mcp-server.js"
-      ],
-      "env": {
-        "CACHE_DURATION": "300000",
-        "ZENTAO_API_VERSION": "v1",
-        "ZENTAO_PASSWORD": "admin",
-        "ZENTAO_URL": "https://xxx/zentao",
-        "ZENTAO_USERNAME": "admin"
-      }
-    }
+```bash
+# 使用MCP模式启动
+npm run start:mcp
+# 或
+pnpm start:mcp
 ```
 
-### 支持的 MCP 工具
+## 可用工具
 
-1. `get_zentao_user_profile` - 获取禅道用户个人信息
-2. `get_zentao_products` - 获取禅道产品列表
-3. `get_bugs_by_product_id` - 根据产品ID获取Bug列表
-4. `get_bug_details` - 获取Bug详情
-5. `view_zentao_bugs` - 查看禅道Bug
-6. `resolve_zentao_bug` - 解决禅道Bug
+### 1. get_zentao_user_profile
+获取当前登录用户的个人信息
 
-#### resolve_zentao_bug 工具参数
+### 2. get_zentao_products
+获取禅道系统中的所有产品列表
 
-- `bugId` (number, 必填): Bug ID
-- `resolution` (string, 必填): 解决方案，可选值包括:
-  - `bydesign` - 设计如此
-  - `duplicate` - 重复bug
-  - `external` - 外部原因
-  - `fixed` - 已解决
-  - `notrepro` - 无法重现
-  - `postponed` - 延期处理
-  - `willnotfix` - 不予解决
-  - `tostory` - 转需求
-- `duplicateBug` (number, 可选): 重复Bug ID，当 resolution 选择 duplicate 时使用
-- `resolvedBuild` (number/string, 可选): 解决版本，传入版本的ID，或者传入 "trunk"（主干）
-- `resolvedDate` (string, 可选): 解决时间
-- `assignedTo` (string, 可选): 指派给
-- `comment` (string, 可选): 备注
+### 3. get_bugs_by_product_id
+根据产品ID获取该产品下的所有Bug列表
 
-示例请求:
-```json
-{
-  "bugId": 1,
-  "resolution": "fixed",
-  "comment": "问题已修复"
-}
+**参数：**
+- `productId` (number): 产品ID
+- `page` (number, optional): 页码
+- `limit` (number, optional): 每页数量
+
+### 4. get_bug_details
+根据Bug ID获取Bug的详细信息
+
+**参数：**
+- `bugId` (number): Bug ID
+- `imageMode` (enum, optional): 图片模式
+  - `none`: 不获取图片（默认）
+  - `url`: 获取图片URL并上传到图床
+  - `base64`: 获取图片并转换为base64
+
+### 5. view_zentao_bugs
+获取并显示禅道系统中的Bug列表
+
+**参数：**
+- `productId` (number, optional): 产品ID
+- `projectId` (number, optional): 项目ID
+- `userId` (number, optional): 用户ID
+- `status` (string, optional): Bug状态
+- `limit` (number, optional): 返回数量限制
+
+### 6. resolve_zentao_bug
+标记指定的禅道Bug为已解决
+
+**参数：**
+- `bugId` (number): Bug ID
+- `resolution` (string): 解决方案
+  - `bydesign`: 设计如此
+  - `duplicate`: 重复bug
+  - `external`: 外部原因
+  - `fixed`: 已解决
+  - `notrepro`: 无法重现
+  - `postponed`: 延期处理
+  - `willnotfix`: 不予解决
+  - `tostory`: 转需求
+- `duplicateBug` (number, optional): 重复Bug ID
+- `resolvedBuild` (string|number, optional): 解决版本
+- `resolvedDate` (string, optional): 解决时间
+- `assignedTo` (string, optional): 指派给
+- `comment` (string, optional): 备注
+
+## 项目结构
+
 ```
+.
+├── src/
+│   ├── zentao-api.js       # 禅道API核心模块
+│   └── image-processor.js  # 图片处理模块
+├── config.js               # 配置文件
+├── mcp-server.js          # MCP服务器主入口
+├── package.json           # 项目配置
+└── README.md              # 项目说明
+```
+
+## 代码优化
+
+### 模块化架构
+- **zentao-api.js**: 封装所有禅道API调用，包含Token缓存管理和自动重试机制
+- **image-processor.js**: 专门处理图片获取、转换和上传逻辑
+- **mcp-server.js**: MCP服务器主入口，简洁清晰
+
+### 代码质量
+- ✅ 消除重复代码
+- ✅ 提取通用错误处理逻辑
+- ✅ 模块化设计，易于维护
+- ✅ 详细的代码注释
+- ✅ 符合最佳实践
+
+## 许可证
+
+ISC

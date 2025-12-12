@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__local-zentao__get_bug_details"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

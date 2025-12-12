@@ -1,8 +1,21 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import axios from "axios";
-import config from "./config.js";
 import * as z from "zod";
+
+// 导入模块化的功能
+import {
+  getZentaoUserProfile,
+  getZentaoProducts,
+  getBugsByProductId,
+  getBugDetails,
+  getZentaoBugs,
+  resolveBug,
+} from "./src/zentao-api.js";
+
+import {
+  processStepsContent,
+} from "./src/image-processor.js";
+
 // 创建 MCP 服务器
 const server = new McpServer(
   {
@@ -18,378 +31,23 @@ const server = new McpServer(
   }
 );
 
-// 缓存禅道认证token
-let cachedToken = null;
-let lastFetchTime = 0;
-const CACHE_DURATION = config.cacheDuration;
-
-// 获取禅道认证token
-async function getZentaoToken() {
-  const now = Date.now();
-  // 如果有缓存且未过期，则直接返回缓存内容
-  if (cachedToken && now - lastFetchTime < CACHE_DURATION) {
-    return cachedToken;
-  }
-
-  try {
-    const authUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/tokens`;
-    const response = await axios.post(
-      authUrl,
+/**
+ * 通用错误处理工具函数
+ */
+function handleError(error, operation) {
+  console.error(`${operation}时出错:`, error.message);
+  return {
+    content: [
       {
-        account: config.zentao.username,
-        password: config.zentao.password,
+        type: "text",
+        text: `${operation}时出错: ${error.message}`,
       },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-      }
-    );
-
-    if (response.data && response.data.token) {
-      cachedToken = response.data.token;
-      lastFetchTime = now;
-      console.log("成功获取禅道认证token");
-      return cachedToken;
-    } else {
-      throw new Error("无法获取认证token: 响应数据为空或不包含token字段");
-    }
-  } catch (error) {
-    console.error("获取禅道认证token失败:", error.message);
-    if (error.response) {
-      console.error("响应状态:", error.response.status);
-      console.error("响应数据:", JSON.stringify(error.response.data, null, 2));
-      console.error("响应头:", JSON.stringify(error.response.headers, null, 2));
-    }
-    throw error;
-  }
+    ],
+    isError: true,
+  };
 }
 
-// 获取用户个人信息
-async function getZentaoUserProfile() {
-  try {
-    const token = await getZentaoToken();
-    const userUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/user`;
-
-    const response = await axios.get(userUrl, {
-      headers: {
-        Token: token,
-        Accept: "application/json",
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    console.error("获取用户个人信息失败:", error.message);
-    if (error.response) {
-      console.error("响应状态:", error.response.status);
-      console.error("响应数据:", JSON.stringify(error.response.data, null, 2));
-      console.error("响应头:", JSON.stringify(error.response.headers, null, 2));
-    }
-
-    // 如果是token过期相关的错误，清除缓存的token
-    if (
-      error.response &&
-      (error.response.status === 401 || error.response.status === 403)
-    ) {
-      cachedToken = null;
-      // 重新尝试获取token并再次请求
-      try {
-        const token = await getZentaoToken();
-        const userUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/user`;
-        const response = await axios.get(userUrl, {
-          headers: {
-            Token: token,
-            Accept: "application/json",
-          },
-        });
-        return response.data;
-      } catch (retryError) {
-        console.error("重新获取用户信息失败:", retryError.message);
-        if (retryError.response) {
-          console.error("重试时响应状态:", retryError.response.status);
-          console.error(
-            "重试时响应数据:",
-            JSON.stringify(retryError.response.data, null, 2)
-          );
-          console.error(
-            "重试时响应头:",
-            JSON.stringify(retryError.response.headers, null, 2)
-          );
-        }
-        throw retryError;
-      }
-    }
-    throw error;
-  }
-}
-
-// 获取产品列表
-async function getZentaoProducts() {
-  try {
-    const token = await getZentaoToken();
-    const productsUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/products`;
-
-    const response = await axios.get(productsUrl, {
-      headers: {
-        Token: token,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    // 如果是token过期相关的错误，清除缓存的token
-    if (
-      error.response &&
-      (error.response.status === 401 || error.response.status === 403)
-    ) {
-      cachedToken = null;
-      // 重新尝试获取token并再次请求
-      try {
-        const token = await getZentaoToken();
-        const productsUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/products`;
-        const response = await axios.get(productsUrl, {
-          headers: {
-            Token: token,
-          },
-        });
-        return response.data;
-      } catch (retryError) {
-        console.error("重新获取产品列表失败:", retryError.message);
-        throw retryError;
-      }
-    }
-    console.error("获取产品列表失败:", error.message);
-    throw error;
-  }
-}
-
-// 根据产品ID获取产品Bug列表
-async function getBugsByProductId(productId, queryParams = {}) {
-  try {
-    const token = await getZentaoToken();
-    let bugsUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/products/${productId}/bugs`;
-
-    // 添加查询参数
-    const params = new URLSearchParams();
-    Object.keys(queryParams).forEach((key) => {
-      if (queryParams[key] !== undefined) {
-        params.append(key, queryParams[key]);
-      }
-    });
-
-    if (params.toString()) {
-      bugsUrl += `?${params.toString()}`;
-    }
-
-    const response = await axios.get(bugsUrl, {
-      headers: {
-        Token: token,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    // 如果是token过期相关的错误，清除缓存的token
-    if (
-      error.response &&
-      (error.response.status === 401 || error.response.status === 403)
-    ) {
-      cachedToken = null;
-      // 重新尝试获取token并再次请求
-      try {
-        const token = await getZentaoToken();
-        let bugsUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/products/${productId}/bugs`;
-
-        // 添加查询参数
-        const params = new URLSearchParams();
-        Object.keys(queryParams).forEach((key) => {
-          if (queryParams[key] !== undefined) {
-            params.append(key, queryParams[key]);
-          }
-        });
-
-        if (params.toString()) {
-          bugsUrl += `?${params.toString()}`;
-        }
-
-        const response = await axios.get(bugsUrl, {
-          headers: {
-            Token: token,
-          },
-        });
-
-        return response.data;
-      } catch (retryError) {
-        console.error("重新获取产品Bug列表失败:", retryError.message);
-        throw retryError;
-      }
-    }
-    console.error("获取产品Bug列表失败:", error.message);
-    throw error;
-  }
-}
-
-// 获取Bug详情
-async function getBugDetails(bugId) {
-  try {
-    const token = await getZentaoToken();
-    const bugUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs/${bugId}`;
-
-    const response = await axios.get(bugUrl, {
-      headers: {
-        Token: token,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    // 如果是token过期相关的错误，清除缓存的token
-    if (
-      error.response &&
-      (error.response.status === 401 || error.response.status === 403)
-    ) {
-      cachedToken = null;
-      // 重新尝试获取token并再次请求
-      try {
-        const token = await getZentaoToken();
-        const bugUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs/${bugId}`;
-        const response = await axios.get(bugUrl, {
-          headers: {
-            Token: token,
-          },
-        });
-        return response.data;
-      } catch (retryError) {
-        console.error("重新获取Bug详情失败:", retryError.message);
-        throw retryError;
-      }
-    }
-    console.error("获取Bug详情失败:", error.message);
-    throw error;
-  }
-}
-
-// 获取禅道Bug列表
-async function getZentaoBugs(queryParams = {}) {
-  try {
-    const token = await getZentaoToken();
-    let bugsUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs`;
-
-    // 添加查询参数
-    const params = new URLSearchParams();
-    Object.keys(queryParams).forEach((key) => {
-      if (queryParams[key] !== undefined) {
-        params.append(key, queryParams[key]);
-      }
-    });
-
-    if (params.toString()) {
-      bugsUrl += `?${params.toString()}`;
-    }
-
-    const response = await axios.get(bugsUrl, {
-      headers: {
-        Token: token,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    // 如果是token过期相关的错误，清除缓存的token
-    if (
-      error.response &&
-      (error.response.status === 401 || error.response.status === 403)
-    ) {
-      cachedToken = null;
-      // 重新尝试获取token并再次请求
-      try {
-        const token = await getZentaoToken();
-        let bugsUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs`;
-
-        // 添加查询参数
-        const params = new URLSearchParams();
-        Object.keys(queryParams).forEach((key) => {
-          if (queryParams[key] !== undefined) {
-            params.append(key, queryParams[key]);
-          }
-        });
-
-        if (params.toString()) {
-          bugsUrl += `?${params.toString()}`;
-        }
-
-        const response = await axios.get(bugsUrl, {
-          headers: {
-            Token: token,
-          },
-        });
-
-        return response.data;
-      } catch (retryError) {
-        console.error("重新获取Bug列表失败:", retryError.message);
-        throw retryError;
-      }
-    }
-    console.error("获取禅道Bug列表失败:", error.message);
-    throw error;
-  }
-}
-
-// 解决Bug
-async function resolveBug(bugId, resolutionData) {
-  try {
-    const token = await getZentaoToken();
-    const resolveUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs/${bugId}/resolve`;
-
-    const response = await axios.post(
-      resolveUrl,
-      resolutionData,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Token: token,
-        },
-      }
-    );
-
-    return response.data;
-  } catch (error) {
-    // 如果是token过期相关的错误，清除缓存的token
-    if (
-      error.response &&
-      (error.response.status === 401 || error.response.status === 403)
-    ) {
-      cachedToken = null;
-      // 重新尝试获取token并再次请求
-      try {
-        const token = await getZentaoToken();
-        const resolveUrl = `${config.zentao.url}/api.php/${config.zentao.apiVersion}/bugs/${bugId}/resolve`;
-
-        const response = await axios.post(
-          resolveUrl,
-          resolutionData,
-          {
-            headers: {
-              "Content-Type": "application/json",
-              Token: token,
-            },
-          }
-        );
-
-        return response.data;
-      } catch (retryError) {
-        console.error("重新解决Bug失败:", retryError.message);
-        throw retryError;
-      }
-    }
-    console.error("解决Bug失败:", error.message);
-    throw error;
-  }
-}
-
-// 定义MCP工具
+// 注册工具: 获取禅道用户个人信息
 server.registerTool(
   "get_zentao_user_profile",
   {
@@ -416,20 +74,12 @@ server.registerTool(
         ],
       };
     } catch (error) {
-      console.error("获取用户个人信息时出错:", JSON.stringify(config));
-      return {
-        content: [
-          {
-            type: "text",
-            text: `获取用户个人信息时出错: ${JSON.stringify(config)}`,
-          },
-        ],
-        isError: true,
-      };
+      return handleError(error, "获取用户个人信息");
     }
   }
 );
 
+// 注册工具: 获取禅道产品列表
 server.registerTool(
   "get_zentao_products",
   {
@@ -466,20 +116,12 @@ server.registerTool(
         ],
       };
     } catch (error) {
-      console.error("获取产品列表时出错:", error.message);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `获取产品列表时出错: ${error.message}`,
-          },
-        ],
-        isError: true,
-      };
+      return handleError(error, "获取产品列表");
     }
   }
 );
 
+// 注册工具: 根据产品ID获取Bug列表
 server.registerTool(
   "get_bugs_by_product_id",
   {
@@ -540,27 +182,20 @@ server.registerTool(
         ],
       };
     } catch (error) {
-      console.error("获取产品Bug列表时出错:", error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `获取产品Bug列表时出错: ${error.message}`,
-          },
-        ],
-        isError: true,
-      };
+      return handleError(error, "获取产品Bug列表");
     }
   }
 );
 
+// 注册工具: 获取Bug详情
 server.registerTool(
   "get_bug_details",
   {
     title: "获取Bug详情",
-    description: "根据Bug ID获取Bug的详细信息",
+    description: "根据Bug ID获取Bug的详细信息，支持三种图片模式",
     inputSchema: {
       bugId: z.number().describe("Bug ID"),
+      imageMode: z.enum(["none", "url", "base64"]).optional().describe("图片模式: none-不获取(默认), url-获取但不含base64, base64-获取并转换base64")
     },
   },
   async (input) => {
@@ -579,6 +214,9 @@ server.registerTool(
 
       const bugDetails = await getBugDetails(input.bugId);
 
+      // 处理steps内容，支持三种模式
+      const processedSteps = await processStepsContent(bugDetails.steps, input.imageMode);
+
       // 提取关键信息
       const simplifiedBugDetails = {
         id: bugDetails.id,
@@ -589,7 +227,9 @@ server.registerTool(
         pri: bugDetails.pri,
         type: bugDetails.type,
         status: bugDetails.status,
-        steps: bugDetails.steps,
+        steps: processedSteps.content,
+        images: processedSteps.images || undefined,
+        imageData: processedSteps.imageData || undefined,
         openedBy: bugDetails.openedBy,
         openedDate: bugDetails.openedDate,
         assignedTo: bugDetails.assignedTo,
@@ -602,29 +242,32 @@ server.registerTool(
         deadline: bugDetails.deadline,
       };
 
+      // 准备返回内容
+      const returnContent = [
+        {
+          type: "text",
+          text: JSON.stringify(simplifiedBugDetails, null, 2),
+        }
+      ];
+
+      // 如果有图片，额外添加图片内容
+      if (processedSteps.images && processedSteps.images.trim() !== '') {
+        returnContent.push({
+          type: "text",
+          text: "\n" + processedSteps.images
+        });
+      }
+
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(simplifiedBugDetails, null, 2),
-          },
-        ],
+        content: returnContent,
       };
     } catch (error) {
-      console.error("获取Bug详情时出错:", error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `获取Bug详情时出错: ${error.message}`,
-          },
-        ],
-        isError: true,
-      };
+      return handleError(error, "获取Bug详情");
     }
   }
 );
 
+// 注册工具: 查看禅道Bug
 server.registerTool(
   "view_zentao_bugs",
   {
@@ -659,20 +302,12 @@ server.registerTool(
         ],
       };
     } catch (error) {
-      console.error("查看禅道Bug时出错:", error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `查看禅道Bug时出错: ${error.message}`,
-          },
-        ],
-        isError: true,
-      };
+      return handleError(error, "查看禅道Bug");
     }
   }
 );
 
+// 注册工具: 标记禅道Bug已解决
 server.registerTool(
   "resolve_zentao_bug",
   {
@@ -757,41 +392,20 @@ server.registerTool(
         ],
       };
     } catch (error) {
-      console.error("解决禅道Bug时出错:", error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `解决禅道Bug时出错: ${error.message}`,
-          },
-        ],
-        isError: true,
-      };
+      return handleError(error, "解决禅道Bug");
     }
   }
 );
 
 // 启动MCP服务
 async function main() {
-  console.log("[DEBUG] 开始启动ZenTao MCP服务");
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.log("ZenTao MCP服务已启动");
-  console.log("支持的工具:");
-  console.log("- get_zentao_user_profile: 获取禅道用户个人信息");
-  console.log("- get_zentao_products: 获取禅道产品列表");
-  console.log("- get_bugs_by_product_id: 根据产品ID获取Bug列表");
-  console.log("- get_bug_details: 获取Bug详情");
-  console.log("- view_zentao_bugs: 查看禅道Bug");
-  console.log("- resolve_zentao_bug: 解决禅道Bug");
 }
-// console.log('SOLA',import.meta.url)
 
-// if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
-    console.error("MCP服务器错误:", error);
-    process.exit(1);
-  });
-// }
+main().catch((error) => {
+  console.error("MCP服务器错误:", error);
+  process.exit(1);
+});
 
 export { server };
